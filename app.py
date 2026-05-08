@@ -78,12 +78,12 @@ with st.sidebar:
 st.subheader("Results")
 
 max_len = calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct)
-one_way = max_len / 2 if max_len is not None else None
+total_cable = max_len * 2 if max_len is not None else None
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("Max circuit length", fmt_length(max_len))
+    st.metric("Max one-way run", fmt_length(max_len), help="Maximum distance from panel to load")
 with col2:
-    st.metric("One-way distance", fmt_length(one_way))
+    st.metric("Total cable needed", fmt_length(total_cable), help="Both conductors combined (2 × one-way run)")
 with col3:
     st.metric("Cable CSA", f"{selected_cable['csa_mm2']} mm²")
 with col4:
@@ -93,13 +93,13 @@ st.divider()
 st.markdown(f"""
 **Voltage drop limits — {v_nom} V, {current_a} A, {selected_cable['csa_mm2']} mm² ({r_ohm_per_km} Ω/km)**
 
-**3%:**  circuit = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 3))}
-**10%:** circuit = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 10))}
+**3%:**  max one-way run = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 3))} · total cable = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 3) * 2 if calc_max_length(v_nom, current_a, r_ohm_per_km, 3) else None)}
+**10%:** max one-way run = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 10))} · total cable = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 10) * 2 if calc_max_length(v_nom, current_a, r_ohm_per_km, 10) else None)}
 """)
 
 # ── Sweep chart ───────────────────────────────────────────────────────────────
 st.divider()
-st.subheader(f"Max circuit length vs cable CSA  ({v_nom} V, {current_a} A, {limit_pct}% limit)")
+st.subheader(f"Max one-way run vs cable CSA  ({v_nom} V, {current_a} A, {limit_pct}% limit)")
 
 cable_labels = list(csa_options.keys())
 sel_idx = cable_labels.index(csa_label)
@@ -131,7 +131,7 @@ fig = go.Figure(
 )
 fig.update_layout(
     xaxis_title="Cable CSA (mm²)",
-    yaxis_title="Max circuit length (m)",
+    yaxis_title="Max one-way run (m)",
     showlegend=False,
     height=420,
     margin=dict(t=20),
