@@ -4,25 +4,41 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Marine Volt Drop Calculator", page_icon="⚡", layout="wide")
 
-# Copper temperature coefficient (per °C) — IEC / Heat Development sheet
-_ALPHA_CU = 0.00393
-# Resistance factor at 90°C operating temp vs 20°C datasheet temp
-HOT_FACTOR = 1 + _ALPHA_CU * (90 - 20)  # ≈ 1.275
+
+def check_password():
+    def _verify():
+        st.session_state["auth"] = (st.session_state.get("pwd") == "vita")
+
+    if st.session_state.get("auth"):
+        return True
+    st.text_input("Password", type="password", on_change=_verify, key="pwd")
+    if "auth" in st.session_state and not st.session_state["auth"]:
+        st.error("Incorrect password.")
+    return False
+
+
+if not check_password():
+    st.stop()
+
+# Copper temperature coefficient — IEC 60092-352 / standard copper resistivity
+_ALPHA_CU = 0.00393  # per °C
+# Resistance multiplier at 90°C conductor operating temp vs 20°C datasheet datum
+HOT_FACTOR = 1 + _ALPHA_CU * (90 - 20)  # = 1.2751
 
 
 @st.cache_data
-def load_data(schema_version=2):  # bump when CSV columns change
+def load_data(schema_version=3):  # bump when CSV columns change
     cables = pd.read_csv("data/cables.csv")
     std_limits = pd.read_csv("data/standards_limits.csv")
     circuit_types = pd.read_csv("data/circuit_types.csv")
     return cables, std_limits, circuit_types
 
 
-cables, std_limits, circuit_types = load_data(schema_version=2)
+cables, std_limits, circuit_types = load_data(schema_version=3)
 
 
-def calc_volt_drop(v_nom, current_a, r_ohm_per_km, run_length_m, hot=False):
-    """Voltage drop (V) for a given one-way run. Both conductors included."""
+def calc_volt_drop(current_a, r_ohm_per_km, run_length_m, hot=False):
+    """Voltage drop (V) for a one-way run. Factor of 2 covers both conductors."""
     factor = HOT_FACTOR if hot else 1.0
     r_total = 2 * run_length_m * r_ohm_per_km / 1000 * factor
     return current_a * r_total
@@ -93,20 +109,22 @@ with st.sidebar:
 # ── Voltage drop — forward calculation ───────────────────────────────────────
 st.subheader(f"Voltage drop — {run_length_m:.1f} m one-way run")
 
-v_drop_cold = calc_volt_drop(v_nom, current_a, r_ohm_per_km, run_length_m, hot=False)
-v_drop_hot  = calc_volt_drop(v_nom, current_a, r_ohm_per_km, run_length_m, hot=True)
+v_drop_cold = calc_volt_drop(current_a, r_ohm_per_km, run_length_m, hot=False)
+v_drop_hot  = calc_volt_drop(current_a, r_ohm_per_km, run_length_m, hot=True)
 vd_pct_cold = v_drop_cold / v_nom * 100
 vd_pct_hot  = v_drop_hot  / v_nom * 100
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Drop % · 20°C", f"{vd_pct_cold:.2f}%")
+c1.metric("Drop % · 20°C", f"{vd_pct_cold:.2f}%",
+          help="Conductor at datasheet reference temperature (20°C)")
 c2.metric("Drop V · 20°C", f"{v_drop_cold:.3f} V")
 c3.metric("V at load · 20°C", f"{v_nom - v_drop_cold:.3f} V")
-c4.metric("Drop % · 90°C", f"{vd_pct_hot:.2f}%")
+c4.metric("Drop % · 90°C", f"{vd_pct_hot:.2f}%",
+          help="Conductor at operating temperature (90°C) — design case")
 c5.metric("Drop V · 90°C", f"{v_drop_hot:.3f} V")
 c6.metric("V at load · 90°C", f"{v_nom - v_drop_hot:.3f} V")
 
-# Pass/fail uses the hot (operating temp) value as the design case
+# Pass/fail on the hot (design) value
 if vd_pct_hot <= limit_pct:
     st.success(
         f"PASS — {vd_pct_hot:.2f}% drop at 90°C is within the {limit_pct}% "
@@ -114,8 +132,8 @@ if vd_pct_hot <= limit_pct:
     )
 elif vd_pct_cold <= limit_pct:
     st.warning(
-        f"MARGINAL — passes at 20°C ({vd_pct_cold:.2f}%) but exceeds limit at "
-        f"90°C operating temp ({vd_pct_hot:.2f}%). Upsize cable or shorten run."
+        f"MARGINAL — {vd_pct_cold:.2f}% at 20°C passes, but {vd_pct_hot:.2f}% at "
+        f"90°C exceeds the {limit_pct}% limit. Upsize CSA or shorten run."
     )
 else:
     st.error(
@@ -132,7 +150,11 @@ ca, cb, cc = st.columns(3)
 ca.metric(
     "Cable ampacity",
     f"{ampacity_a:.0f} A",
-    help="IEC 60092-352 — single core, free air, 40 °C ambient. Derate for engine space or bundled runs.",
+    help=(
+        "IEC 60092-352:2005 Annex B — formula I = α × A^0.625, "
+        "90°C conductor / 45°C ambient / up to 4 cables bunched. "
+        "Apply 0.85 derating for >6 cables bunched."
+    ),
 )
 cb.metric("Load current", f"{current_a:.1f} A")
 cc.metric("Utilisation", f"{utilisation:.0f}%")
@@ -145,7 +167,7 @@ if current_a > ampacity_a:
 elif utilisation > 80:
     st.warning(
         f"HIGH LOAD — {utilisation:.0f}% utilisation. Consider derating for engine space, "
-        "bundled installation, or high ambient temperature."
+        "heavy bundling, or elevated ambient temperature."
     )
 else:
     st.success(f"PASS — {current_a:.1f} A is within the {ampacity_a:.0f} A cable rating.")
@@ -163,10 +185,12 @@ d2.metric("Total cable needed", fmt_length(total_cable), help="Both conductors �
 d3.metric("Cable CSA", f"{selected_cable['csa_mm2']} mm²")
 d4.metric("Resistance", f"{r_ohm_per_km} Ω/km")
 
+
 def _ref(pct):
     ml = calc_max_length(v_nom, current_a, r_ohm_per_km, pct)
     tc = ml * 2 if ml else None
     return f"max one-way = {fmt_length(ml)} · total cable = {fmt_length(tc)}"
+
 
 st.markdown(f"**3%:** {_ref(3)}  \n**10%:** {_ref(10)}")
 
@@ -227,8 +251,8 @@ with st.expander("📋 Cable data"):
 
 st.divider()
 st.caption(
-    "Cable resistance: H+S RADOX 125 DOC-0000317514 (27-Oct-2023) at 20°C · "
-    "Hot factor: copper α = 0.00393 /°C, T_op = 90°C → ×1.275 · "
-    "Ampacity: IEC 60092-352, single core, free air, 40°C ambient · "
+    "Resistance: H+S RADOX 125 DOC-0000317514 at 20°C (1.0 mm² = IEC 60228 Class 5 max) · "
+    "Hot factor: α = 0.00393 /°C, T_conductor = 90°C → ×1.2751 · "
+    "Ampacity: IEC 60092-352:2005 Annex B (I = α·A^0.625, 90°C/45°C, ≤4 cables bunched) · "
     "Volt drop limits: ABYC E-11 §11.15.1.2.7 · ISO 13297:2020 §5.5–5.6 · ISO 16315:DIS 2023 §10.6"
 )
