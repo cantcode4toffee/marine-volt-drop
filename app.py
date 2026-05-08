@@ -4,6 +4,11 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Marine Volt Drop Calculator", page_icon="⚡", layout="wide")
 
+# Copper temperature coefficient (per °C) — IEC / Heat Development sheet
+_ALPHA_CU = 0.00393
+# Resistance factor at 90°C operating temp vs 20°C datasheet temp
+HOT_FACTOR = 1 + _ALPHA_CU * (90 - 20)  # ≈ 1.275
+
 
 @st.cache_data
 def load_data():
@@ -16,12 +21,18 @@ def load_data():
 cables, std_limits, circuit_types = load_data()
 
 
+def calc_volt_drop(v_nom, current_a, r_ohm_per_km, run_length_m, hot=False):
+    """Voltage drop (V) for a given one-way run. Both conductors included."""
+    factor = HOT_FACTOR if hot else 1.0
+    r_total = 2 * run_length_m * r_ohm_per_km / 1000 * factor
+    return current_a * r_total
+
+
 def calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct):
-    """Max one-way circuit length (m) for given voltage drop limit. Returns None if undefined."""
+    """Max one-way run (m) before voltage drop exceeds limit. Returns None if undefined."""
     if current_a == 0 or r_ohm_per_km == 0:
         return None
     v_drop_max = v_nom * limit_pct / 100
-    # V_drop = 2 * L(km) * r_ohm_per_km * I  →  L(m) = V_drop_max * 1000 / (2 * I * r_ohm_per_km)
     length_m = (v_drop_max * 1000) / (2 * current_a * r_ohm_per_km)
     return length_m if length_m > 0 else None
 
@@ -48,54 +59,116 @@ st.caption(
     "Part of the Vita electrical design toolset"
 )
 
-# ── Sidebar inputs ────────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Circuit parameters")
 
-    v_nom = st.slider("System voltage (V)", min_value=9, max_value=36, value=12, step=1)
+    v_nom = st.slider("System voltage (V)", min_value=9, max_value=36, value=13, step=1)
     st.caption(f"**{v_nom} V** — {nominal_label(v_nom)}")
 
     current_a = st.number_input(
-        "Load current (A)", min_value=0.1, max_value=5000.0, value=10.0, step=0.5
+        "Load current (A)", min_value=0.1, max_value=5000.0, value=1.0, step=0.5
+    )
+
+    run_length_m = st.number_input(
+        "Cable run — one way (m)", min_value=0.1, max_value=5000.0, value=5.0, step=0.5
     )
 
     csa_options = {f"{row.csa_mm2} mm²": row for _, row in cables.iterrows()}
     csa_label = st.selectbox(
-        "Cable CSA", list(csa_options.keys()), index=7  # default 4 mm²
+        "Cable CSA", list(csa_options.keys()), index=2  # default 0.5 mm²
     )
     selected_cable = csa_options[csa_label]
     r_ohm_per_km = float(selected_cable["resistance_ohm_per_km"])
+    ampacity_a = float(selected_cable["ampacity_a"])
 
     circuit_type_options = {
         row.display_name: row for _, row in circuit_types.iterrows()
     }
-    ct_label = st.selectbox("Circuit type", list(circuit_type_options.keys()))
+    ct_label = st.selectbox("Circuit type", list(circuit_type_options.keys()), index=0)
     selected_ct = circuit_type_options[ct_label]
     limit_pct = int(selected_ct.limit_pct_abyc)
     st.caption(f"Voltage drop limit: **{limit_pct}%** (ABYC E-11 / ISO 13297)")
 
-# ── Results ───────────────────────────────────────────────────────────────────
-st.subheader("Results")
+# ── Voltage drop — forward calculation ───────────────────────────────────────
+st.subheader(f"Voltage drop — {run_length_m:.1f} m one-way run")
+
+v_drop_cold = calc_volt_drop(v_nom, current_a, r_ohm_per_km, run_length_m, hot=False)
+v_drop_hot  = calc_volt_drop(v_nom, current_a, r_ohm_per_km, run_length_m, hot=True)
+vd_pct_cold = v_drop_cold / v_nom * 100
+vd_pct_hot  = v_drop_hot  / v_nom * 100
+
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Drop % · 20°C", f"{vd_pct_cold:.2f}%")
+c2.metric("Drop V · 20°C", f"{v_drop_cold:.3f} V")
+c3.metric("V at load · 20°C", f"{v_nom - v_drop_cold:.3f} V")
+c4.metric("Drop % · 90°C", f"{vd_pct_hot:.2f}%")
+c5.metric("Drop V · 90°C", f"{v_drop_hot:.3f} V")
+c6.metric("V at load · 90°C", f"{v_nom - v_drop_hot:.3f} V")
+
+# Pass/fail uses the hot (operating temp) value as the design case
+if vd_pct_hot <= limit_pct:
+    st.success(
+        f"PASS — {vd_pct_hot:.2f}% drop at 90°C is within the {limit_pct}% "
+        f"{selected_ct.display_name} limit."
+    )
+elif vd_pct_cold <= limit_pct:
+    st.warning(
+        f"MARGINAL — passes at 20°C ({vd_pct_cold:.2f}%) but exceeds limit at "
+        f"90°C operating temp ({vd_pct_hot:.2f}%). Upsize cable or shorten run."
+    )
+else:
+    st.error(
+        f"FAIL — {vd_pct_cold:.2f}% drop exceeds the {limit_pct}% "
+        f"{selected_ct.display_name} limit. Increase CSA or reduce run length."
+    )
+
+# ── Current rating ────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("Current rating")
+
+utilisation = current_a / ampacity_a * 100
+ca, cb, cc = st.columns(3)
+ca.metric(
+    "Cable ampacity",
+    f"{ampacity_a:.0f} A",
+    help="IEC 60092-352 — single core, free air, 40 °C ambient. Derate for engine space or bundled runs.",
+)
+cb.metric("Load current", f"{current_a:.1f} A")
+cc.metric("Utilisation", f"{utilisation:.0f}%")
+
+if current_a > ampacity_a:
+    st.error(
+        f"OVERCURRENT — {current_a:.1f} A exceeds the {ampacity_a:.0f} A cable rating. "
+        "Select a larger CSA."
+    )
+elif utilisation > 80:
+    st.warning(
+        f"HIGH LOAD — {utilisation:.0f}% utilisation. Consider derating for engine space, "
+        "bundled installation, or high ambient temperature."
+    )
+else:
+    st.success(f"PASS — {current_a:.1f} A is within the {ampacity_a:.0f} A cable rating.")
+
+# ── Maximum run ───────────────────────────────────────────────────────────────
+st.divider()
+st.subheader(f"Maximum run — {limit_pct}% limit")
 
 max_len = calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct)
 total_cable = max_len * 2 if max_len is not None else None
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Max one-way run", fmt_length(max_len), help="Maximum distance from panel to load")
-with col2:
-    st.metric("Total cable needed", fmt_length(total_cable), help="Both conductors combined (2 × one-way run)")
-with col3:
-    st.metric("Cable CSA", f"{selected_cable['csa_mm2']} mm²")
-with col4:
-    st.metric("Resistance", f"{r_ohm_per_km} Ω/km")
 
-st.divider()
-st.markdown(f"""
-**Voltage drop limits — {v_nom} V, {current_a} A, {selected_cable['csa_mm2']} mm² ({r_ohm_per_km} Ω/km)**
+d1, d2, d3, d4 = st.columns(4)
+d1.metric("Max one-way run", fmt_length(max_len), help="Maximum distance from panel to load")
+d2.metric("Total cable needed", fmt_length(total_cable), help="Both conductors — 2 × one-way run")
+d3.metric("Cable CSA", f"{selected_cable['csa_mm2']} mm²")
+d4.metric("Resistance", f"{r_ohm_per_km} Ω/km")
 
-**3%:**  max one-way run = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 3))} · total cable = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 3) * 2 if calc_max_length(v_nom, current_a, r_ohm_per_km, 3) else None)}
-**10%:** max one-way run = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 10))} · total cable = {fmt_length(calc_max_length(v_nom, current_a, r_ohm_per_km, 10) * 2 if calc_max_length(v_nom, current_a, r_ohm_per_km, 10) else None)}
-""")
+def _ref(pct):
+    ml = calc_max_length(v_nom, current_a, r_ohm_per_km, pct)
+    tc = ml * 2 if ml else None
+    return f"max one-way = {fmt_length(ml)} · total cable = {fmt_length(tc)}"
+
+st.markdown(f"**3%:** {_ref(3)}  \n**10%:** {_ref(10)}")
 
 # ── Sweep chart ───────────────────────────────────────────────────────────────
 st.divider()
@@ -139,7 +212,7 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 st.caption(
     f"Showing 5 sizes either side of the selected {selected_cable['csa_mm2']} mm² cable "
-    f"(highlighted in orange)."
+    "(highlighted in orange)."
 )
 
 # ── Reference tables ──────────────────────────────────────────────────────────
@@ -154,6 +227,8 @@ with st.expander("📋 Cable data"):
 
 st.divider()
 st.caption(
-    "Cable resistivity: H+S RADOX 125 DOC-0000317514 (27-Oct-2023) at 20°C · "
-    "ABYC E-11 §11.15.1.2.7 · ISO 13297:2020 §5.5–5.6 + Annex A · ISO 16315:DIS 2023 §10.6"
+    "Cable resistance: H+S RADOX 125 DOC-0000317514 (27-Oct-2023) at 20°C · "
+    "Hot factor: copper α = 0.00393 /°C, T_op = 90°C → ×1.275 · "
+    "Ampacity: IEC 60092-352, single core, free air, 40°C ambient · "
+    "Volt drop limits: ABYC E-11 §11.15.1.2.7 · ISO 13297:2020 §5.5–5.6 · ISO 16315:DIS 2023 §10.6"
 )
