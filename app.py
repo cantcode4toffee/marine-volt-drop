@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="Marine Volt Drop Calculator", page_icon="⚡", layout="wide")
 
@@ -9,11 +10,10 @@ def load_data():
     cables = pd.read_csv("data/cables.csv")
     std_limits = pd.read_csv("data/standards_limits.csv")
     circuit_types = pd.read_csv("data/circuit_types.csv")
-    system_voltages = pd.read_csv("data/system_voltages.csv")
-    return cables, std_limits, circuit_types, system_voltages
+    return cables, std_limits, circuit_types
 
 
-cables, std_limits, circuit_types, system_voltages = load_data()
+cables, std_limits, circuit_types = load_data()
 
 
 def calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct):
@@ -34,6 +34,14 @@ def fmt_length(length_m):
     return f"{length_m:.1f} m"
 
 
+def nominal_label(v):
+    if v <= 14:
+        return "12 V nominal system"
+    if v <= 28:
+        return "24 V nominal system"
+    return "32 V nominal system"
+
+
 st.title("⚡ Marine Volt Drop Calculator")
 st.caption(
     "Standards-verified volt drop calculator for marine electrical systems · "
@@ -44,15 +52,8 @@ st.caption(
 with st.sidebar:
     st.header("Circuit parameters")
 
-    voltage_options = {
-        f"{row.voltage_v}V — {row.label}": row.voltage_v
-        for _, row in system_voltages.iterrows()
-    }
-    v_label = st.selectbox("System voltage", list(voltage_options.keys()), index=1)
-    v_nom = voltage_options[v_label]
-
-    if v_nom >= 400:
-        st.warning("⚠️ HV system — see standards note in main panel.")
+    v_nom = st.slider("System voltage (V)", min_value=9, max_value=36, value=12, step=1)
+    st.caption(nominal_label(v_nom))
 
     current_a = st.number_input(
         "Load current (A)", min_value=0.1, max_value=5000.0, value=10.0, step=0.5
@@ -70,24 +71,8 @@ with st.sidebar:
     }
     ct_label = st.selectbox("Circuit type", list(circuit_type_options.keys()))
     selected_ct = circuit_type_options[ct_label]
-    default_limit = int(selected_ct.limit_pct_abyc)
-
-    limit_pct = st.radio(
-        "Voltage drop limit",
-        options=[3, 10],
-        format_func=lambda x: f"{x}% ({'critical' if x == 3 else 'non-critical'})",
-        index=0 if default_limit == 3 else 1,
-    )
-
-# ── HV out-of-scope banner ────────────────────────────────────────────────────
-if v_nom >= 400:
-    st.error(
-        "**HV systems (≥400 V DC): outside the scope of ABYC E-11 and ISO 13297.**  \n"
-        "ABYC E-11 and ISO 13297 cover systems up to 50 V DC (ELV) and standard LV AC. "
-        "For propulsion bus voltages of 400 V–800 V DC, refer to the **IEC 60092-350 series** "
-        "and your classification society rules (DNV, Lloyd's, BV, etc.).  \n"
-        "Volt-drop figures shown below are indicative only and must not be used for HV design approval."
-    )
+    limit_pct = int(selected_ct.limit_pct_abyc)
+    st.caption(f"Voltage drop limit: **{limit_pct}%** (ABYC E-11 / ISO 13297)")
 
 # ── Results ───────────────────────────────────────────────────────────────────
 st.subheader("Results")
@@ -112,18 +97,46 @@ st.markdown(f"""
 # ── Sweep chart ───────────────────────────────────────────────────────────────
 st.divider()
 st.subheader(f"Max circuit length vs cable CSA  ({v_nom} V, {current_a} A, {limit_pct}% limit)")
-sweep_data = [
-    {
-        "CSA (mm²)": r["csa_mm2"],
-        "Max circuit (m)": round(calc_max_length(v_nom, current_a, r["resistance_ohm_per_km"], limit_pct), 1),
-    }
-    for _, r in cables.iterrows()
-    if calc_max_length(v_nom, current_a, r["resistance_ohm_per_km"], limit_pct) is not None
-]
-st.bar_chart(
-    pd.DataFrame(sweep_data).set_index("CSA (mm²)"),
-    y="Max circuit (m)",
-    use_container_width=True,
+
+cable_labels = list(csa_options.keys())
+sel_idx = cable_labels.index(csa_label)
+lo = max(0, sel_idx - 5)
+hi = min(len(cable_labels) - 1, sel_idx + 5)
+slice_labels = cable_labels[lo : hi + 1]
+
+sweep_rows = []
+for lbl in slice_labels:
+    row = csa_options[lbl]
+    length = calc_max_length(v_nom, current_a, float(row["resistance_ohm_per_km"]), limit_pct)
+    if length is not None:
+        sweep_rows.append({
+            "csa": str(row["csa_mm2"]),
+            "length_m": round(length, 1),
+            "selected": lbl == csa_label,
+        })
+
+df_sweep = pd.DataFrame(sweep_rows)
+bar_colors = ["#FF6B35" if sel else "#4A90D9" for sel in df_sweep["selected"]]
+
+fig = go.Figure(
+    go.Bar(
+        x=df_sweep["csa"],
+        y=df_sweep["length_m"],
+        marker_color=bar_colors,
+        hovertemplate="%{x} mm²<br>%{y:.1f} m<extra></extra>",
+    )
+)
+fig.update_layout(
+    xaxis_title="Cable CSA (mm²)",
+    yaxis_title="Max circuit length (m)",
+    showlegend=False,
+    height=420,
+    margin=dict(t=20),
+)
+st.plotly_chart(fig, use_container_width=True)
+st.caption(
+    f"Showing 5 sizes either side of the selected {selected_cable['csa_mm2']} mm² cable "
+    f"(highlighted in orange)."
 )
 
 # ── Reference tables ──────────────────────────────────────────────────────────
