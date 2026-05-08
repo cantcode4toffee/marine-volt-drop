@@ -11,14 +11,14 @@ HOT_FACTOR = 1 + _ALPHA_CU * (90 - 20)  # ≈ 1.275
 
 
 @st.cache_data
-def load_data():
+def load_data(schema_version=2):  # bump when CSV columns change
     cables = pd.read_csv("data/cables.csv")
     std_limits = pd.read_csv("data/standards_limits.csv")
     circuit_types = pd.read_csv("data/circuit_types.csv")
     return cables, std_limits, circuit_types
 
 
-cables, std_limits, circuit_types = load_data()
+cables, std_limits, circuit_types = load_data(schema_version=2)
 
 
 def calc_volt_drop(v_nom, current_a, r_ohm_per_km, run_length_m, hot=False):
