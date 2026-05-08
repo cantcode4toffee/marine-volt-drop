@@ -9,5 +9,5 @@ Standards-verified volt drop calculator for marine electrical systems. Part of t
 
 ### Deploy
 - Repo: marine-volt-drop
-- Streamlit subdomain: vita-volt-drop → https://vita-volt-drop.streamlit.app
+- Streamlit subdomain: electricaldesign → https://electricaldesign.streamlit.app
 - Entry point: app.py
