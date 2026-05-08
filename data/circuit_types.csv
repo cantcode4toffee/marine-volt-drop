@@ -1,0 +1,4 @@
+circuit_type,display_name,limit_pct_abyc,limit_pct_iso,examples,standard_ref
+critical,Critical / Safety,3,3,"Bilge pumps, navigation lights, e-stop circuits, steering, helm instruments, fire/flood alarms","ABYC E-11 §11.15.1.2.7; ISO 13297 §5.6"
+lighting_non_nav,Lighting (non-navigation),10,10,"Cabin lighting, deck lighting, courtesy lights","ABYC E-11 §11.15.1.2.7; ISO 13297 §5.5"
+non_critical,General / Non-critical,10,10,"Domestic appliances, HVAC, entertainment, USB charging","ABYC E-11 §11.15.1.2.7; ISO 13297 §5.5"

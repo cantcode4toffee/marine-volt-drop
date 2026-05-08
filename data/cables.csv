@@ -1,0 +1,22 @@
+csa_mm2,resistance_ohm_per_km,source,notes
+0.25,85.9,H+S RADOX 125 Table 1 (300/500V),19 x 0.13mm strands
+0.34,52.1,H+S RADOX 125 Table 1 (300/500V),19 x 0.16mm strands
+0.5,40.1,H+S RADOX 125 Table 1 (300/500V),19 x 0.18mm strands
+0.75,26.7,H+S RADOX 125 Table 1 (300/500V),24 x 0.20mm strands
+1.0,19.5,IEC 60228 Class 5 (copper),Typical value at 20°C
+1.5,13.7,H+S RADOX 125 Table 1 (300/500V),30 x 0.25mm strands
+2.5,8.21,H+S RADOX 125 Table 1 (300/500V),48 x 0.25mm strands
+4.0,5.09,H+S RADOX 125 Table 1 (300/500V),56 x 0.30mm strands
+6.0,3.39,H+S RADOX 125 Table 1 (300/500V),82 x 0.30mm strands
+10.0,1.95,H+S RADOX 125 Table 2 (600/1000V),78 x 0.40mm strands
+16.0,1.24,H+S RADOX 125 Table 2 (600/1000V),119 x 0.40mm strands
+25.0,0.795,H+S RADOX 125 Table 2 (600/1000V),189 x 0.40mm strands
+35.0,0.565,H+S RADOX 125 Table 2 (600/1000V),266 x 0.40mm strands
+50.0,0.393,H+S RADOX 125 Table 2 (600/1000V),378 x 0.40mm strands
+70.0,0.277,H+S RADOX 125 Table 2 (600/1000V),348 x 0.50mm strands
+95.0,0.210,H+S RADOX 125 Table 2 (600/1000V),456 x 0.50mm strands
+120.0,0.164,H+S RADOX 125 Table 2 (600/1000V),570 x 0.50mm strands
+150.0,0.132,H+S RADOX 125 Table 2 (600/1000V),722 x 0.50mm strands
+185.0,0.108,H+S RADOX 125 Table 2 (600/1000V),874 x 0.50mm strands
+240.0,0.0817,H+S RADOX 125 Table 2 (600/1000V),1147 x 0.50mm strands
+300.0,0.0654,H+S RADOX 125 Table 2 (600/1000V),1443 x 0.50mm strands

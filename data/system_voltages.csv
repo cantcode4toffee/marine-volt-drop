@@ -1,0 +1,9 @@
+voltage_v,label,typical_use
+12,12V DC,Small craft; legacy outboard auxiliary
+24,24V DC,Larger vessels; commercial small craft
+32,32V DC,Some US legacy systems
+48,48V DC,Modern electric auxiliary; foiling craft controls
+120,120V DC,ELV boundary — above this is LV per ISO
+400,400V DC,Typical HV propulsion bus (e.g. Gen2.5)
+600,600V DC,High-power propulsion systems
+800,800V DC,High-performance marine EV systems
