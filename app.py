@@ -53,7 +53,7 @@ with st.sidebar:
     st.header("Circuit parameters")
 
     v_nom = st.slider("System voltage (V)", min_value=9, max_value=36, value=12, step=1)
-    st.caption(nominal_label(v_nom))
+    st.caption(f"**{v_nom} V** — {nominal_label(v_nom)}")
 
     current_a = st.number_input(
         "Load current (A)", min_value=0.1, max_value=5000.0, value=10.0, step=0.5
@@ -78,12 +78,15 @@ with st.sidebar:
 st.subheader("Results")
 
 max_len = calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct)
-col1, col2, col3 = st.columns(3)
+one_way = max_len / 2 if max_len is not None else None
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("Max circuit length", fmt_length(max_len))
 with col2:
-    st.metric("Cable CSA", f"{selected_cable['csa_mm2']} mm²")
+    st.metric("One-way distance", fmt_length(one_way))
 with col3:
+    st.metric("Cable CSA", f"{selected_cable['csa_mm2']} mm²")
+with col4:
     st.metric("Resistance", f"{r_ohm_per_km} Ω/km")
 
 st.divider()
