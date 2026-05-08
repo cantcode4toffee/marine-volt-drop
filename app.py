@@ -45,11 +45,12 @@ def calc_volt_drop(current_a, r_ohm_per_km, run_length_m, hot=False):
 
 
 def calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct):
-    """Max one-way run (m) before voltage drop exceeds limit. Returns None if undefined."""
+    """Max one-way run (m) at 90°C operating temp before voltage drop exceeds limit."""
     if current_a == 0 or r_ohm_per_km == 0:
         return None
     v_drop_max = v_nom * limit_pct / 100
-    length_m = (v_drop_max * 1000) / (2 * current_a * r_ohm_per_km)
+    # Use hot resistance so the result is the true design limit at operating temperature
+    length_m = (v_drop_max * 1000) / (2 * current_a * r_ohm_per_km * HOT_FACTOR)
     return length_m if length_m > 0 else None
 
 
@@ -180,7 +181,8 @@ max_len = calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct)
 total_cable = max_len * 2 if max_len is not None else None
 
 d1, d2, d3, d4 = st.columns(4)
-d1.metric("Max one-way run", fmt_length(max_len), help="Maximum distance from panel to load")
+d1.metric("Max one-way run", fmt_length(max_len),
+          help="At 90°C conductor temp — guaranteed to pass limit at operating temperature")
 d2.metric("Total cable needed", fmt_length(total_cable), help="Both conductors — 2 × one-way run")
 d3.metric("Cable CSA", f"{selected_cable['csa_mm2']} mm²")
 d4.metric("Resistance", f"{r_ohm_per_km} Ω/km")
