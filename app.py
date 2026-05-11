@@ -4,8 +4,13 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Marine Volt Drop Calculator", page_icon="⚡", layout="wide")
 
-_ALPHA_CU = 0.00393
-HOT_FACTOR = 1 + _ALPHA_CU * (90 - 20)  # = 1.2751
+_ALPHA_CU = 0.00393  # Copper temperature coefficient — IEC 60092-352 / standard copper resistivity
+
+# Group correction factors — IEC 60092-352:2005 Table A.6
+_GROUP_K = {
+    1: 1.00, 2: 0.80, 3: 0.70, 4: 0.65, 5: 0.60, 6: 0.57,
+    7: 0.54, 8: 0.52, 9: 0.50, 10: 0.48, 11: 0.47, 12: 0.45,
+}
 
 _FONTS = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
@@ -63,20 +68,35 @@ def load_data(schema_version=3):
 cables, std_limits, circuit_types = load_data(schema_version=3)
 
 
-def calc_volt_drop(current_a, r_ohm_per_km, run_length_m, hot=False):
-    """Voltage drop (V) for a one-way run. Factor of 2 covers both conductors."""
-    factor = HOT_FACTOR if hot else 1.0
-    r_total = 2 * run_length_m * r_ohm_per_km / 1000 * factor
-    return current_a * r_total
+def calc_volt_drop(current_a, r_ohm_per_km, run_length_m, t_conductor=90):
+    """Voltage drop (V) at 20°C (cold) and t_conductor °C (hot). Returns (v_cold, v_hot)."""
+    r_one_way = run_length_m * r_ohm_per_km / 1000
+    v_cold = current_a * 2 * r_one_way
+    v_hot  = current_a * 2 * r_one_way * (1 + _ALPHA_CU * (t_conductor - 20))
+    return v_cold, v_hot
 
 
-def calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct):
-    """Max one-way run (m) at 90°C operating temp before voltage drop exceeds limit."""
+def calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct, t_conductor=90):
+    """Max one-way run (m) at t_conductor operating temp before volt drop exceeds limit."""
     if current_a == 0 or r_ohm_per_km == 0:
         return None
     v_drop_max = v_nom * limit_pct / 100
-    length_m = (v_drop_max * 1000) / (2 * current_a * r_ohm_per_km * HOT_FACTOR)
+    hot_factor = 1 + _ALPHA_CU * (t_conductor - 20)
+    length_m = (v_drop_max * 1000) / (2 * current_a * r_ohm_per_km * hot_factor)
     return length_m if length_m > 0 else None
+
+
+def derate_ampacity(i_base, t_conductor, t_ambient, n_cables):
+    """
+    Derate base ampacity (tabulated at 90°C conductor / 45°C ambient / 1 cable) to
+    actual installation conditions using IEC 60092-352:2005.
+
+    Returns (i_derated, k_thermal, k_group).
+    """
+    # Thermal correction from 90°C/45°C base to actual Tc/Ta conditions
+    k_t = ((t_conductor - t_ambient) / (90.0 - 45.0)) ** 0.5
+    k_g = _GROUP_K.get(min(n_cables, 12), 0.45)
+    return i_base * k_t * k_g, k_t, k_g
 
 
 def fmt_length(length_m):
@@ -95,7 +115,7 @@ def nominal_label(v):
     return "32 V nominal"
 
 
-# ── HTML helpers (inline styles — no <style> injection needed) ─────────────────
+# ── HTML helpers ───────────────────────────────────────────────────────────────
 _STATE_COLORS = {
     "pass": ("#3fb950", "rgba(63,185,80,0.07)"),
     "warn": ("#d29922", "rgba(210,153,34,0.07)"),
@@ -122,23 +142,29 @@ _S_BADGE = (
     "letter-spacing:0.06em;color:#6e7681;background:#21262d;"
     "padding:0.1rem 0.35rem;border-radius:3px;text-transform:uppercase;"
 )
-_S_GRID = (
-    "display:grid;grid-template-columns:repeat(3,1fr);gap:0.65rem;margin-bottom:0.75rem;"
+_S_SUB = (
+    "display:block;font-family:'Barlow',sans-serif;font-size:0.68rem;"
+    "color:#6e7681;margin-top:0.25rem;"
 )
 
 
-def kpi_tile(label, value, badge=None, extra=""):
+def kpi_tile(label, value, badge=None, sub=None, extra=""):
     b = f'<span style="{_S_BADGE}">{badge}</span>' if badge else ""
+    s = f'<span style="{_S_SUB}">{sub}</span>' if sub else ""
     return (
         f'<div style="{_S_TILE}">{b}'
         f'<span style="{_S_LABEL}">{label}</span>'
         f'<span style="{_S_VALUE}">{value}</span>'
-        f'{extra}</div>'
+        f'{s}{extra}</div>'
     )
 
 
-def kpi_grid(*tiles):
-    return f'<div style="{_S_GRID}">{"".join(tiles)}</div>'
+def kpi_grid(*tiles, cols=3):
+    grid_s = (
+        f"display:grid;grid-template-columns:repeat({cols},1fr);"
+        "gap:0.65rem;margin-bottom:0.75rem;"
+    )
+    return f'<div style="{grid_s}">{"".join(tiles)}</div>'
 
 
 def status_banner(state, icon, detail):
@@ -165,6 +191,10 @@ def zone_label(text):
 
 def zone_div():
     return '<hr style="border:none;border-top:1px solid #21262d;margin:1rem 0 1.1rem;">'
+
+
+def inner_div():
+    return '<hr style="border:none;border-top:1px solid #161B22;margin:0.5rem 0 0.75rem;">'
 
 
 def maxrun_cell(label, value):
@@ -234,7 +264,7 @@ with c4:
     csa_label = st.selectbox("Cable CSA", list(csa_options.keys()), index=2)
     selected_cable = csa_options[csa_label]
     r_ohm_per_km = float(selected_cable["resistance_ohm_per_km"])
-    ampacity_a = float(selected_cable["ampacity_a"])
+    ampacity_base = float(selected_cable["ampacity_a"])
 
 with c5:
     ct_label = st.selectbox("Circuit type", list(circuit_type_options.keys()), index=0)
@@ -242,14 +272,56 @@ with c5:
     limit_pct = int(selected_ct.limit_pct_abyc)
     st.caption(f"Limit: {limit_pct}% · ABYC E-11 / ISO 13297")
 
+# Installation conditions row
+st.markdown(inner_div(), unsafe_allow_html=True)
+
+i1, i2, i3, _, _ = st.columns([1.2, 1, 1, 1.2, 1.6])
+
+with i1:
+    t_conductor = st.selectbox(
+        "Conductor temp rating (°C)",
+        options=[60, 75, 90, 105, 125],
+        index=2,
+        help=(
+            "Maximum conductor operating temperature per insulation class. "
+            "60°C = PVC; 75°C = MDI/XLPE; 90°C = XLPE/standard (IEC 60092-352 reference); "
+            "105°C = EPR; 125°C = RADOX 125. Affects both resistance (volt drop) and ampacity."
+        ),
+    )
+
+with i2:
+    t_ambient = st.number_input(
+        "Ambient temp (°C)",
+        min_value=10,
+        max_value=t_conductor - 5,
+        value=min(45, t_conductor - 5),
+        step=5,
+        help="Air temperature at the cable installation location. Engine rooms often 55–70°C.",
+    )
+
+with i3:
+    n_cables = st.number_input(
+        "Cables in bundle",
+        min_value=1,
+        max_value=20,
+        value=1,
+        step=1,
+        help=(
+            "Total cables touching or grouped together. "
+            "IEC 60092-352 Table A.6 correction: 1=1.00, 2=0.80, 3=0.70, 4=0.65, "
+            "5=0.60, 6=0.57, 9=0.50, ≥12=0.45."
+        ),
+    )
+
 st.markdown(zone_div(), unsafe_allow_html=True)
 
 # ── Calculations ───────────────────────────────────────────────────────────────
-v_drop_cold = calc_volt_drop(current_a, r_ohm_per_km, run_length_m, hot=False)
-v_drop_hot  = calc_volt_drop(current_a, r_ohm_per_km, run_length_m, hot=True)
+v_drop_cold, v_drop_hot = calc_volt_drop(current_a, r_ohm_per_km, run_length_m, t_conductor)
 vd_pct_cold = v_drop_cold / v_nom * 100
 vd_pct_hot  = v_drop_hot  / v_nom * 100
-utilisation = current_a / ampacity_a * 100
+
+i_derated, k_thermal, k_group = derate_ampacity(ampacity_base, t_conductor, t_ambient, n_cables)
+utilisation = current_a / i_derated * 100 if i_derated > 0 else float("inf")
 
 # ── Zone 2: RESULTS — Volt Drop ────────────────────────────────────────────────
 st.markdown(zone_label("Results — Volt Drop"), unsafe_allow_html=True)
@@ -257,14 +329,14 @@ st.markdown(zone_label("Results — Volt Drop"), unsafe_allow_html=True)
 if vd_pct_hot <= limit_pct:
     vd_state, vd_icon = "pass", "✓ PASS"
     vd_detail = (
-        f"{vd_pct_hot:.2f}% drop at 90°C is within the {limit_pct}% "
+        f"{vd_pct_hot:.2f}% drop at {t_conductor}°C is within the {limit_pct}% "
         f"{selected_ct.display_name} limit"
     )
 elif vd_pct_cold <= limit_pct:
     vd_state, vd_icon = "warn", "⚠ MARGINAL"
     vd_detail = (
-        f"{vd_pct_cold:.2f}% at 20°C passes but {vd_pct_hot:.2f}% at 90°C exceeds "
-        f"the {limit_pct}% limit — upsize CSA or shorten run"
+        f"{vd_pct_cold:.2f}% at 20°C passes but {vd_pct_hot:.2f}% at {t_conductor}°C "
+        f"exceeds the {limit_pct}% limit — upsize CSA or shorten run"
     )
 else:
     vd_state, vd_icon = "fail", "✗ FAIL"
@@ -279,9 +351,9 @@ st.markdown(
         kpi_tile("Volt Drop %",     f"{vd_pct_cold:.2f}%",         badge="20°C"),
         kpi_tile("Volt Drop",       f"{v_drop_cold:.3f} V",         badge="20°C"),
         kpi_tile("Voltage at Load", f"{v_nom - v_drop_cold:.3f} V", badge="20°C"),
-        kpi_tile("Volt Drop %",     f"{vd_pct_hot:.2f}%",           badge="90°C"),
-        kpi_tile("Volt Drop",       f"{v_drop_hot:.3f} V",          badge="90°C"),
-        kpi_tile("Voltage at Load", f"{v_nom - v_drop_hot:.3f} V",  badge="90°C"),
+        kpi_tile("Volt Drop %",     f"{vd_pct_hot:.2f}%",           badge=f"{t_conductor}°C"),
+        kpi_tile("Volt Drop",       f"{v_drop_hot:.3f} V",          badge=f"{t_conductor}°C"),
+        kpi_tile("Voltage at Load", f"{v_nom - v_drop_hot:.3f} V",  badge=f"{t_conductor}°C"),
     ),
     unsafe_allow_html=True,
 )
@@ -290,46 +362,93 @@ st.markdown(
 st.markdown(zone_div(), unsafe_allow_html=True)
 st.markdown(zone_label("Results — Current Rating"), unsafe_allow_html=True)
 
-if current_a > ampacity_a:
+if i_derated <= 0:
+    cr_state, cr_icon = "fail", "✗ INVALID"
+    cr_detail = "Ambient temperature equals or exceeds conductor temperature rating — cable will overheat."
+    bar_state = "fail"
+elif current_a > i_derated:
     cr_state, cr_icon = "fail", "✗ OVERCURRENT"
     cr_detail = (
-        f"{current_a:.1f} A exceeds the {ampacity_a:.0f} A cable rating "
+        f"{current_a:.1f} A exceeds derated ampacity of {i_derated:.1f} A "
+        f"({t_ambient}°C ambient, {n_cables} cable{'s' if n_cables > 1 else ''} in bundle) "
         "— select a larger CSA"
     )
     bar_state = "fail"
 elif utilisation > 80:
     cr_state, cr_icon = "warn", "⚠ HIGH LOAD"
     cr_detail = (
-        f"{utilisation:.0f}% utilisation — consider derating for engine space, "
-        "heavy bundling, or elevated ambient temperature"
+        f"{utilisation:.0f}% of derated ampacity ({i_derated:.1f} A) — "
+        "consider next CSA up for margin, or check derating assumptions"
     )
     bar_state = "warn"
 else:
     cr_state, cr_icon = "pass", "✓ PASS"
-    cr_detail = f"{current_a:.1f} A is within the {ampacity_a:.0f} A cable rating"
+    cr_detail = (
+        f"{current_a:.1f} A is within the derated ampacity of {i_derated:.1f} A "
+        f"({t_ambient}°C ambient, {n_cables} cable{'s' if n_cables > 1 else ''} in bundle)"
+    )
     bar_state = "pass"
+
+# Derating is nominal — no correction applied
+no_derate = (t_conductor == 90 and t_ambient == 45 and n_cables == 1)
+k_combined = k_thermal * k_group
 
 st.markdown(
     status_banner(cr_state, cr_icon, cr_detail)
     + kpi_grid(
-        kpi_tile("Cable Ampacity", f"{ampacity_a:.0f} A"),
-        kpi_tile("Load Current",   f"{current_a:.1f} A"),
-        kpi_tile("Utilisation",    f"{utilisation:.0f}%",
-                 extra=util_bar(utilisation, bar_state)),
+        kpi_tile(
+            "Base Ampacity",
+            f"{ampacity_base:.0f} A",
+            sub=f"90°C / 45°C / 1 cable",
+        ),
+        kpi_tile(
+            "Derated Ampacity",
+            f"{i_derated:.1f} A",
+            sub=f"{t_conductor}°C / {t_ambient}°C amb / {n_cables}C",
+        ),
+        kpi_tile(
+            "Load Current",
+            f"{current_a:.1f} A",
+            extra=util_bar(utilisation, bar_state),
+            sub=f"{utilisation:.0f}% of derated",
+        ),
     ),
     unsafe_allow_html=True,
 )
 
+# Derating breakdown — only shown when derating is active
+if not no_derate:
+    st.markdown(
+        kpi_grid(
+            kpi_tile(
+                "Thermal Factor",
+                f"× {k_thermal:.3f}",
+                sub=f"{t_conductor}°C cable / {t_ambient}°C ambient",
+            ),
+            kpi_tile(
+                "Group Factor",
+                f"× {k_group:.2f}",
+                sub=f"{n_cables} cables — IEC 60092-352 Table A.6",
+            ),
+            kpi_tile(
+                "Combined Factor",
+                f"× {k_combined:.3f}",
+                sub=f"{ampacity_base:.0f} A → {i_derated:.1f} A",
+            ),
+        ),
+        unsafe_allow_html=True,
+    )
+
 # ── Zone 3: ANALYSIS ──────────────────────────────────────────────────────────
 st.markdown(zone_div(), unsafe_allow_html=True)
 
-max_len     = calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct)
+max_len     = calc_max_length(v_nom, current_a, r_ohm_per_km, limit_pct, t_conductor)
 total_cable = max_len * 2 if max_len is not None else None
-max_len_3   = calc_max_length(v_nom, current_a, r_ohm_per_km, 3)
-max_len_10  = calc_max_length(v_nom, current_a, r_ohm_per_km, 10)
+max_len_3   = calc_max_length(v_nom, current_a, r_ohm_per_km, 3, t_conductor)
+max_len_10  = calc_max_length(v_nom, current_a, r_ohm_per_km, 10, t_conductor)
 
 st.markdown(
-    zone_label(f"Analysis — Maximum Run ({limit_pct}% limit at 90°C)")
+    zone_label(f"Analysis — Maximum Run ({limit_pct}% limit at {t_conductor}°C)")
     + maxrun_grid(
         maxrun_cell("Max one-way run",  fmt_length(max_len)),
         maxrun_cell("Total cable (×2)", fmt_length(total_cable)),
@@ -348,7 +467,8 @@ hi = min(len(cable_labels) - 1, sel_idx + 5)
 sweep_rows = []
 for lbl in cable_labels[lo : hi + 1]:
     row = csa_options[lbl]
-    length = calc_max_length(v_nom, current_a, float(row["resistance_ohm_per_km"]), limit_pct)
+    length = calc_max_length(v_nom, current_a, float(row["resistance_ohm_per_km"]),
+                             limit_pct, t_conductor)
     if length is not None:
         sweep_rows.append({
             "csa": str(row["csa_mm2"]),
@@ -382,7 +502,7 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 st.caption(
     f"5 sizes either side of selected {selected_cable['csa_mm2']} mm² (amber bar). "
-    "Max run at 90°C conductor temperature."
+    f"Max run at {t_conductor}°C conductor temperature."
 )
 
 # ── Reference tables ───────────────────────────────────────────────────────────
@@ -400,8 +520,10 @@ with st.expander("Cable data"):
 st.markdown(
     '<div style="font-size:0.72rem;color:#6e7681;font-family:\'Barlow\',sans-serif;margin-top:0.5rem;">'
     "Resistance: H+S RADOX 125 DOC-0000317514 at 20°C (1.0 mm² = IEC 60228 Class 5 max) · "
-    "Hot factor: α = 0.00393 /°C, T<sub>conductor</sub> = 90°C → ×1.2751 · "
-    "Ampacity: IEC 60092-352:2005 Annex B (I = α·A^0.625, 90°C/45°C, ≤4 cables bunched) · "
+    f"Hot resistance at conductor temp: α = 0.00393 /°C · "
+    "Base ampacity: IEC 60092-352:2005 Annex B (I = α·A^0.625, 90°C/45°C, 1 cable) · "
+    "Thermal derating: K<sub>t</sub> = √((T<sub>c</sub>−T<sub>amb</sub>)/45) · "
+    "Group derating: IEC 60092-352:2005 Table A.6 · "
     "Volt drop limits: ABYC E-11 §11.15.1.2.7 · ISO 13297:2020 §5.5–5.6 · ISO 16315:DIS 2023 §10.6"
     "</div>",
     unsafe_allow_html=True,
